@@ -99,7 +99,7 @@ for i, val in enumerate(optimal_beta):
     if i == 0:
         print("Beta 0: " + str(val))
     else:
-        if val == 0.99999:
+        if val == 0.9999999:
             print(value_feature_map[i], 1, cnt_1[i], cnt_0[i])
         else:
             print(value_feature_map[i], val, cnt_1[i], cnt_0[i])
