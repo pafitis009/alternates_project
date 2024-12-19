@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import parameters
 import math
+import matplotlib.pyplot as plt
 
 from itertools import combinations
 from scipy.optimize import minimize
@@ -148,6 +149,52 @@ def estimate_dropout(possible_subsets):
         betas, mpvf, mpfv = estimate_dropout_for_subset(possible_subsets[st], st)
         dic_betas[st] = (betas, mpvf, mpfv)
     return dic_betas
+def compute_beta_statistics(possible_subsets):
+    statistics = {}
+    for subset in possible_subsets.keys():
+        temp_dic = {}
+        temp_dic[subset] = possible_subsets[subset]
+        beta_estimates = estimate_dropout(temp_dic)
+        col_names = ['Number','STATUS','A','L','D','E','F','G','H','I','B','J','K','C','M','N','DATA_ID']
+        cnt = 0
+        ones = {}
+        betas, mpvf, _ = beta_estimates[subset]
+        for i in range(2, 16):
+            if subset[i] == '1':
+                ones[cnt] = i
+                cnt += 1
+        for i, beta in enumerate(betas):
+            if i == 0:
+                feature_pair = 'beta_0'
+            else:
+                feature_pair = (col_names[ones[mpvf[i][0]]], mpvf[i][0])
+            
+            if feature_pair not in statistics.keys():
+                statistics[feature_pair] = [beta]
+            else:
+                statistics[feature_pair].append(beta)
+
+        print(statistics)
+
+    # Set up the plot
+    plt.figure(figsize=(10, 6))
+
+    # Plot each key's values as a series of points
+    for i, (key, val_list) in enumerate(statistics.items()):
+        plt.scatter([str(key)] * len(val_list), val_list, label=str(key), s=100)  # Adjust marker size with `s`
+
+    # Add labels and title
+    plt.xlabel('Keys')
+    plt.ylabel('Values')
+    plt.title('Scatter Plot of Values per Key')
+    plt.ylim(0, 1)  # Since values are between 0 and 1
+
+    # Add a grid for better readability
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+
+    # Show the plot
+    plt.show()
+
 
 def get_sample_dropouts(beta_estimates, dic_panel, num_samples):
     final_samples = {}
@@ -190,12 +237,10 @@ def compute_exact_quotas(dic_panel, beta_estimates):
         cur_data = cur_data.drop(columns=['DATA_ID', 'Number', 'STATUS'])
         for _,row in cur_data.iterrows():
             idx = 0
-            for _ in cur_data.columns:
-                quotas_dataset[(idx, float('nan'))] = 1
-                idx += 1
-            idx = 0
             for col in cur_data.columns:
                 cur_feature = (idx, row[col])
+                if row[col] != row[col]:
+                    print(dataset)
                 if cur_feature not in quotas_dataset.keys():
                     quotas_dataset[cur_feature] = 1
                 else:
@@ -204,103 +249,126 @@ def compute_exact_quotas(dic_panel, beta_estimates):
         quotas[dataset] = quotas_dataset
     return quotas
 
-def compute_score(alternates, quotas, panel, dropouts, number_of_alternates):
-    def binary_strings(n = number_of_alternates):
-        for i in range(2**n):
-            st = format(i, f'0{n}b')
-            yield st
-    cur_quotas = quotas.copy()
-    cur_panel = panel.copy()
-
-    st = compute_st(cur_panel)
-    columns_to_keep = [col for col, keep in zip(cur_panel.columns, st) if keep == '1']
-    cur_panel = cur_panel[columns_to_keep]
-    cur_panel = cur_panel.drop(columns=['DATA_ID', 'Number', 'STATUS'])
-    for i, dropout in enumerate(dropouts):
-        if dropout == 0 or dropout == '0':
-            continue
-        row = cur_panel.iloc[i]
-        for i, col in enumerate(cur_panel.columns):
-            if isinstance(row[col], float):
-                if math.isnan(row[col]):
-                    continue
-            cur_quotas[(i, row[col])] -= 1
-    smallest_loss = 100
-    for R in binary_strings():
-        idx1 = 0
-        for _, row in alternates.iterrows():
-            if R[idx1] == '0':
-                continue
-            idx2 = 0
-            for col in alternates.columns:
-                if isinstance(row[col], float):
-                    if math.isnan(row[col]):
-                        continue
-                if (idx2, row[col]) not in cur_quotas.keys():
-                    idx2 += 1
-                    continue
-                cur_quotas[(idx2, row[col])] += 1
-            idx1 += 1
-        loss = 0
-        for feature in quotas.keys():
-            if isinstance(feature[1], float):
-                if math.isnan(feature[1]):
-                    continue
-            loss += ((np.abs(quotas[feature] - cur_quotas[feature])) / quotas[feature])
-        if loss <= smallest_loss:
-            smallest_loss = loss
-        idx1 = 0
-        for _, row in alternates.iterrows():
-            if R[idx1] == '0':
-                continue
-            idx2 = 0
-            for col in alternates.columns:
-                if isinstance(row[col], float):
-                    if math.isnan(row[col]):
-                        continue
-                if (idx2, row[col]) not in cur_quotas.keys():
-                    idx2 += 1
-                    continue
-                cur_quotas[(idx2, row[col])] -= 1
-                idx2 += 1
-            idx1 += 1
-    return smallest_loss
-
-def get_best_alternates(quotas, panel, pool, samples, num_alternates):
-    def binary_strings_with_k_ones(n = len(pool), k = num_alternates):
-        if k > n:
-            return
-        for ones_positions in combinations(range(n), k):
-            binary = [False] * n
-            for pos in ones_positions:
-                binary[pos] = True
-            yield binary
-    best_alternates_set = 0
-    best_alternates_loss = 1000
-    for alt_st in binary_strings_with_k_ones():
-        alternates_df = pool[alt_st]
-        loss = 0
-        for dropouts in samples:
-            loss += compute_score(alternates_df, quotas, panel, dropouts, num_alternates)
-        loss = loss / len(samples)
-        if loss <= best_alternates_loss:
-            best_alternates_loss = loss
-            best_alternates_set = alt_st
-    return (best_alternates_set, loss)
+# TODO: For Carmel, fill out this function that computes the best set of alternates
+def compute_best_alternates(quotas, panel, pool, dropout_set, num_alternates):
+    """
+    quotas: dictionary that maps feature-value pairs to number of people needed for that fv pair
+    panel: pandas dataframe containing all the people in the pool of that dataset
+    pool: pandas dataframe containing all people in the pool of that dataset
+    dropouts: list that contains len(dropouts) dropout sets. Each dropout set is represented with a list of size equal to the length of the panel and contains 0 if the person stays and 1 if they dropout
+    num_alternates: integer, number of alternates allowed
+    """
+    return 0
 
 
-def compute_best_alternates(quotas, dic_pool, dic_panel, samples, number_of_alternates):
-    losses = {}
-    for dataset in samples.keys():
-        st = compute_st(dic_pool[dataset])
-        alternates_df = dic_pool[dataset].copy()
-        columns_to_keep = [col for col, keep in zip(alternates_df.columns, st) if keep == '1']
-        alternates_df = alternates_df[columns_to_keep]
-        alternates_df = alternates_df.drop(columns=['DATA_ID', 'Number', 'STATUS'])
-        for st in samples[dataset]:
-            print(dataset, st)
-            if len(samples[dataset][st]) == 0:
-                continue
-            best_alternate_set, best_loss = get_best_alternates(quotas[dataset], dic_panel[dataset], alternates_df, samples[dataset][st], number_of_alternates)
-            losses[(dataset, st)] = (best_alternate_set, best_loss)
-    return losses
+
+
+
+
+
+
+
+
+
+
+# BRUTE FORCE COMPUTATION
+# def compute_score(alternates, quotas, panel, dropouts, number_of_alternates):
+#     def binary_strings(n = number_of_alternates):
+#         for i in range(2**n):
+#             st = format(i, f'0{n}b')
+#             yield st
+#     cur_quotas = quotas.copy()
+#     cur_panel = panel.copy()
+
+#     st = compute_st(cur_panel)
+#     columns_to_keep = [col for col, keep in zip(cur_panel.columns, st) if keep == '1']
+#     cur_panel = cur_panel[columns_to_keep]
+#     cur_panel = cur_panel.drop(columns=['DATA_ID', 'Number', 'STATUS'])
+#     for i, dropout in enumerate(dropouts):
+#         if dropout == 0 or dropout == '0':
+#             continue
+#         row = cur_panel.iloc[i]
+#         for i, col in enumerate(cur_panel.columns):
+#             if isinstance(row[col], float):
+#                 if math.isnan(row[col]):
+#                     continue
+#             cur_quotas[(i, row[col])] -= 1
+#     smallest_loss = 100
+#     for R in binary_strings():
+#         idx1 = 0
+#         for _, row in alternates.iterrows():
+#             if R[idx1] == '0':
+#                 continue
+#             idx2 = 0
+#             for col in alternates.columns:
+#                 if isinstance(row[col], float):
+#                     if math.isnan(row[col]):
+#                         continue
+#                 if (idx2, row[col]) not in cur_quotas.keys():
+#                     idx2 += 1
+#                     continue
+#                 cur_quotas[(idx2, row[col])] += 1
+#             idx1 += 1
+#         loss = 0
+#         for feature in quotas.keys():
+#             if isinstance(feature[1], float):
+#                 if math.isnan(feature[1]):
+#                     continue
+#             loss += ((np.abs(quotas[feature] - cur_quotas[feature])) / quotas[feature])
+#         if loss <= smallest_loss:
+#             smallest_loss = loss
+#         idx1 = 0
+#         for _, row in alternates.iterrows():
+#             if R[idx1] == '0':
+#                 continue
+#             idx2 = 0
+#             for col in alternates.columns:
+#                 if isinstance(row[col], float):
+#                     if math.isnan(row[col]):
+#                         continue
+#                 if (idx2, row[col]) not in cur_quotas.keys():
+#                     idx2 += 1
+#                     continue
+#                 cur_quotas[(idx2, row[col])] -= 1
+#                 idx2 += 1
+#             idx1 += 1
+#     return smallest_loss
+
+# def get_best_alternates(quotas, panel, pool, samples, num_alternates):
+#     def binary_strings_with_k_ones(n = len(pool), k = num_alternates):
+#         if k > n:
+#             return
+#         for ones_positions in combinations(range(n), k):
+#             binary = [False] * n
+#             for pos in ones_positions:
+#                 binary[pos] = True
+#             yield binary
+#     best_alternates_set = 0
+#     best_alternates_loss = 1000
+#     for alt_st in binary_strings_with_k_ones():
+#         alternates_df = pool[alt_st]
+#         loss = 0
+#         for dropouts in samples:
+#             loss += compute_score(alternates_df, quotas, panel, dropouts, num_alternates)
+#         loss = loss / len(samples)
+#         if loss <= best_alternates_loss:
+#             best_alternates_loss = loss
+#             best_alternates_set = alt_st
+#     return (best_alternates_set, loss)
+
+
+# def compute_best_alternates(quotas, dic_pool, dic_panel, samples, number_of_alternates):
+#     losses = {}
+#     for dataset in samples.keys():
+#         st = compute_st(dic_pool[dataset])
+#         alternates_df = dic_pool[dataset].copy()
+#         columns_to_keep = [col for col, keep in zip(alternates_df.columns, st) if keep == '1']
+#         alternates_df = alternates_df[columns_to_keep]
+#         alternates_df = alternates_df.drop(columns=['DATA_ID', 'Number', 'STATUS'])
+#         for st in samples[dataset]:
+#             print(dataset, st)
+#             if len(samples[dataset][st]) == 0:
+#                 continue
+#             best_alternate_set, best_loss = get_best_alternates(quotas[dataset], dic_panel[dataset], alternates_df, samples[dataset][st], number_of_alternates)
+#             losses[(dataset, st)] = (best_alternate_set, best_loss)
+#     return losses
