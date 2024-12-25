@@ -1,46 +1,53 @@
 import utils
 import matplotlib.pyplot as plt
-# Read data and split them into seperate datasets where people in the same datasets
-# must have values for the same exact features
+import pandas as pd
 
-# dic_panel is a dictionary that contains all people of certain dataset from the panel
-# dic_pool is a dictionary that contains all people of certain dataset from the pool
-# data_panel is a dictionary that contains all people from panels
-# dic_panel is a dictionary that contains all people from pools
-dic_panel, dic_pool, data_panel, data_pool = utils.read_and_seperate_data()
-# Estimate beta values 
-# gets subsets of {0,1}^{# of features} that the betas will be based on. 
-# We set some constraints such as they have to be between some values 
-# (number_of_minimum_features and number_of_maximum_features) and they
-# have to be compatible with at least some number of datasets (at least number_of_minimum_datasets)
-possible_subsets = utils.compute_possible_subsets(data_panel)
+# Get data from file
+dic_panel, dic_pool, datasets = utils.read_and_seperate_data()
+# Get rid of ABE as it has missing entries
+dic_panel.pop('ABE')
+dic_pool.pop('ABE')
+# These datasets do not contain dropouts
+dic_panel.pop('ABR')
+dic_pool.pop('ABR')
+dic_panel.pop('ABL')
+dic_pool.pop('ABL')
+dic_panel.pop('ABT')
+dic_pool.pop('ABT')
 
-# print(possible_subsets)
+# Get possible subsets of features satisfying constraints we set in parameters file
+possible_subsets = utils.compute_possible_subsets()
 
-temp_dic = {}
-entry = next(iter(possible_subsets))
-temp_dic[entry] = possible_subsets[entry]
+# Get the best possible betas for each dataset
+best_betas = utils.compute_best_betas(possible_subsets, dic_panel)
 
-# get estimates for each vector of betas we decided to use
-beta_estimates = utils.estimate_dropout(temp_dic)
 
-# TODO: Need to find which subset of betas to choose in order to compute the maximum likelihood
-best_features_for_dataset = {}
+alternates_LP_loss = {}
+alternates_real_loss = {}
+# For each dataset
+for dataset in best_betas.keys():
+    # Compute the best set of alternates that minimizes expected risk
+    alternate_set, alternates_LP_loss[dataset] = utils.get_alternates_set(dataset, dic_panel[dataset], dic_pool[dataset], best_betas[dataset][0], best_betas[dataset][2])
+    # Calculate the risk on real data
+    alternates_real_loss[dataset] = utils.alternates_real_loss(alternate_set, dic_panel[dataset], dic_pool[dataset], dataset)
+    print(dataset)
+    print(dic_pool[dataset].iloc[alternate_set])
+    print(alternates_LP_loss[dataset])
+    print(alternates_real_loss[dataset])
 
-# compute_beta_statistics(possible_subsets)
+keys = list(alternates_real_loss.keys())
+values = list(alternates_real_loss.values())
 
-# Get sample dropout sets 
-# computes dropout probabilities for each dataset, and each beta we choose for that dataset
-# and gives dropout sets 
-dropouts = utils.get_sample_dropouts(beta_estimates, dic_panel, 10)
+# Create the histogram
+plt.bar(keys, values)
 
-# # Computes the best alternate set for the data set & the choice of betas - consequently the dropout sets
-alternates = 1
-quotas = utils.compute_exact_quotas(dic_panel, beta_estimates)
+# Add labels and title
+plt.xlabel('Datasets')
+plt.ylabel('Loss')
+plt.title('Losses of datasets')
 
-for dataset in quotas.keys():
-    best_alternates = utils.compute_best_alternates(quotas[dataset], dic_panel[dataset], dic_pool[dataset], dropouts[dataset][best_features_for_dataset[dataset]], alternates)
-
-# Datasets missing entries
-# ABL, ABQ, ABE
+# Show the plot
+plt.show()
+# # # Datasets missing entries
+# # # ABL, ABQ, ABE
 

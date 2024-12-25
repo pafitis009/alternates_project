@@ -3,7 +3,9 @@ import pandas as pd
 import parameters
 import math
 import matplotlib.pyplot as plt
+import scipy.stats as stats
 
+from mip import Model, xsum, BINARY, MAXIMIZE, MINIMIZE
 from itertools import combinations
 from scipy.optimize import minimize
 from scipy.optimize import Bounds
@@ -17,6 +19,8 @@ def read_and_seperate_data():
 
     unique_categories = data['DATA_ID'].unique()
 
+    unique_categories = unique_categories.tolist()
+
     dic_panel = {}
     dic_pool = {}
 
@@ -28,347 +32,273 @@ def read_and_seperate_data():
         subset = data_per_group_pool[data_per_group_pool['DATA_ID'] == category]
         dic_pool[category] = subset
     
-    return dic_panel, dic_pool, data_per_group_panel, data_per_group_pool
+    return dic_panel, dic_pool, unique_categories
 
-def compute_possible_subsets(data):
+def compute_possible_subsets():
     def binary_strings(n = parameters.number_of_features):
         for i in range(2**n):
             st = format(i, f'0{n}b')
             if st.count('1') >= parameters.number_of_minimum_features and st.count('1') <= parameters.number_of_maximum_features:
                 yield st
-    def check_non_empty_dataframe(binary_string, df):
-        columns_to_check = [col for col, bit in zip(df.columns, binary_string) if bit == '1']
-        filtered_df = df.dropna(subset=columns_to_check)
-        return filtered_df
+    def check_subset(a, b):
+        for i in range(len(a)):
+            if a[i] == '1' and b[i] == '0':
+                return False
+        return True
     
     dic = {}
     for st in binary_strings():
         st = '11' + st + '1'
-        filtered = check_non_empty_dataframe(st, data)
-        unique_categories = filtered['DATA_ID'].unique()
-        if len(unique_categories) >= parameters.number_of_minimum_datasets:
-            dic[st] = filtered
+        supersets = []
+        for dataset in parameters.dataset_features.keys():
+            if check_subset(st, parameters.dataset_features[dataset]):
+                supersets.append(dataset)
+        if len(supersets) > parameters.number_of_minimum_datasets:
+            dic[st] = supersets
     return dic
 
-def estimate_dropout_for_subset(data, st):
-    columns_to_drop = [col for col, bit in zip(data.columns, st) if bit == '0']
-    data = data.drop(columns=columns_to_drop)
-    filtered_data = data.drop(columns=['DATA_ID', 'Number'])  # Drop unnecessary columns
+def prepare_data(data, subset):
+    data['Dropped'] = (data['STATUS'] != 'Selected').astype(int)
+    arr = np.array([])
+    for i in range(len(subset) + 1):
+        if i == 0 or i == 1 or i >= len(subset) - 2 or subset[i] == '0':
+            arr = np.append(arr, [0])
+        else:
+            arr = np.append(arr, [1])
+    X = data.loc[:, arr.astype(bool)]
+    y = data.loc[:, 'Dropped']
+    return X, y
 
-    filtered_data['y'] = filtered_data['STATUS'].apply(lambda x: 1 if x == "Selected" else 0)
-    filtered_data = filtered_data.drop(columns=['STATUS'])  # Drop the STATUS column after mapping
+def get_beta_index(i, v_i, columns):
+    j = 0
+    idx = 1
+    while j <= i:
+        if j < i:
+            idx += parameters.feature_values[columns[j]]
+        else:
+            idx += parameters.offsets[(columns[i], v_i)]
+        j += 1
+    return idx
 
-    # Prepare the feature matrix and target vector
-    feature_matrix = filtered_data.drop(columns=['y']).values
-    target_vector = filtered_data['y'].values
+def compute_dropout_prob(betas, beta_columns, dataset_columns, features):
+    p = betas[0]
+    offset = 1
+    idx = 0
+    for i, column in enumerate(dataset_columns):
+        if column not in beta_columns:
+            continue
+        p *= betas[offset + parameters.offsets[(beta_columns[idx], features[i])]]
+        offset += parameters.feature_values[beta_columns[idx]]
+        idx += 1
+    return p
 
-    # Calculate the total number of unique values per feature
-    unique_values_per_feature = [set({value for value in feature_matrix[:, i] if value != -1}) for i in range(feature_matrix.shape[1])]
-    num_parameters = 1 + sum([len(x) for x in unique_values_per_feature])  # Beta dimension
+def compute_betas(X, y, columns):
+    num_parameters = 1
     
-    feature_value_map = {}
-    value_feature_map = {}
-    offset = 1  # Start after beta_0
-    for i, unique_values in enumerate(unique_values_per_feature):
-        for value in unique_values:  # Adjust this loop if features aren't integer-encoded
-            feature_value_map[(i, value)] = offset
-            value_feature_map[offset] = (i, value)
-            offset += 1
-    # print(feature_matrix)
-    # print(target_vector)
-    # Define the log-likelihood function
-    def log_likelihood(beta, X, y):
+    for column in columns:
+        num_parameters += parameters.feature_values[column]
+    
+    def log_likelihood(beta):
         log_likelihood_value = 0
         for v, y_v in zip(X, y):
-            # Calculate the linear combination: beta_0 + sum(beta_{f_i, v_i})
             beta_sum = beta[0] 
-            # print(v, y_v)
             for i, v_i in enumerate(v):
                 if v_i == -1:
                     continue
-                beta_sum *= beta[feature_value_map[(i, v_i)]]
-            
-            # Calculate the likelihood components
+                beta_sum *= beta[get_beta_index(i, v_i, columns)]
 
             if y_v == 1:
                 log_likelihood_value += (np.log(beta_sum))
             else:
                 log_likelihood_value += np.log(1 - beta_sum)
         
-        return -log_likelihood_value  # Negate for maximization
-
-    # # Initial beta values
+        return -log_likelihood_value
     beta_initial = np.random.rand(num_parameters)
-
-    # Scale and shift to the range [-1, -0.5]
-    cnt = 0
-    cnt_0 = [0]*num_parameters
-    cnt_1 = [0]*num_parameters
-    for i in range(len(feature_matrix)):
-        if target_vector[i] == 0:
-            cnt+= 1
-            for j, f in enumerate(feature_matrix[i]):
-                if f == -1:
-                    continue
-                cnt_0[feature_value_map[(j,f)]] += 1
-        else:
-            for j, f in enumerate(feature_matrix[i]):
-                if f == -1:
-                    continue
-                cnt_1[feature_value_map[(j,f)]] += 1
-
     bounds = Bounds([0.00001] * num_parameters, [0.9999999] * num_parameters)
 
-    # Optimize the log-likelihood function
     result = minimize(
         log_likelihood,
         beta_initial,
-        args=(feature_matrix, target_vector),
+        args=(),
         method='L-BFGS-B',
         bounds = bounds,
         options={'disp': True}
     )
 
-    # # Extract the optimal beta
     optimal_beta = result.x
     print("Optimal beta:", optimal_beta)
-    # print(unique_values_per_feature)
-    # for i, val in enumerate(optimal_beta):
-    #     if i == 0:
-    #         print("Beta 0: " + str(val))
-    #     else:
-    #         if val == 0.9999999:
-    #             print(value_feature_map[i], 1, cnt_1[i], cnt_0[i])
-    #         else:
-    #             print(value_feature_map[i], val, cnt_1[i], cnt_0[i])
-    return (optimal_beta, value_feature_map, feature_value_map)
+    return optimal_beta
 
-def estimate_dropout(possible_subsets):
-    dic_betas = {}
-    for st in possible_subsets.keys():
-        betas, mpvf, mpfv = estimate_dropout_for_subset(possible_subsets[st], st)
-        dic_betas[st] = (betas, mpvf, mpfv)
-    return dic_betas
-def compute_beta_statistics(possible_subsets):
-    statistics = {}
+def get_loss_betas(betas, X, y, columns):
+    y_pred = []
+
+    for person in X:
+        p = betas[0]
+        for i, v_i in enumerate(person):
+            p *= betas[get_beta_index(i, v_i, columns)]
+        y_pred.append(p)
+    y_pred = np.array(y_pred)
+    y_true = np.array(y)
+
+    return np.linalg.norm(y_pred - y_true)
+
+def k_fold_validation(X, y):
+    k = len(X)
+    columns = X[0].columns.tolist()
+    losses = []
+    X_all = pd.concat([df for df in X])
+    y_all = pd.concat([df for df in y])
+
+    for i in range(k):
+        X_test = X[i]
+        y_test = y[i]
+        X_train = pd.concat([df for idx, df in enumerate(X) if idx != i])
+        y_train = pd.concat([df for idx, df in enumerate(y) if idx != i])
+        # Compute optimal betas for the training set
+        betas = compute_betas(np.array(X_train), np.array(y_train), columns)
+
+        # Compute the loss for the test set
+        loss = get_loss_betas(betas, np.array(X_test), np.array(y_test), columns)
+        losses.append(loss)
+
+    average_loss = np.mean(losses)
+
+    return compute_betas(np.array(X_all), np.array(y_all), columns), average_loss, columns
+
+def compute_best_betas(possible_subsets, dic_panel):
+    dataset_betas = {}
+    best_betas = {}
+    idx = 0
     for subset in possible_subsets.keys():
-        temp_dic = {}
-        temp_dic[subset] = possible_subsets[subset]
-        beta_estimates = estimate_dropout(temp_dic)
-        col_names = ['Number','STATUS','A','L','D','E','F','G','H','I','B','J','K','C','M','N','DATA_ID']
-        cnt = 0
-        ones = {}
-        betas, mpvf, _ = beta_estimates[subset]
-        for i in range(2, 16):
-            if subset[i] == '1':
-                ones[cnt] = i
-                cnt += 1
-        for i, beta in enumerate(betas):
-            if i == 0:
-                feature_pair = 'beta_0'
-            else:
-                feature_pair = (col_names[ones[mpvf[i][0]]], mpvf[i][0])
-            
-            if feature_pair not in statistics.keys():
-                statistics[feature_pair] = [beta]
-            else:
-                statistics[feature_pair].append(beta)
-
-        print(statistics)
-
-    # Set up the plot
-    plt.figure(figsize=(10, 6))
-
-    # Plot each key's values as a series of points
-    for i, (key, val_list) in enumerate(statistics.items()):
-        plt.scatter([str(key)] * len(val_list), val_list, label=str(key), s=100)  # Adjust marker size with `s`
-
-    # Add labels and title
-    plt.xlabel('Keys')
-    plt.ylabel('Values')
-    plt.title('Scatter Plot of Values per Key')
-    plt.ylim(0, 1)  # Since values are between 0 and 1
-
-    # Add a grid for better readability
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
-
-    # Show the plot
-    plt.show()
+        if idx > 4:
+            break
+        dataframes = []
+        labels = []
+        for dataset in possible_subsets[subset]:
+            X, y = prepare_data(dic_panel[dataset], subset)
+            dataframes.append(X)
+            labels.append(y)
+        betas, loss, columns = k_fold_validation(dataframes, labels)
+        for dataset in possible_subsets[subset]:
+            if dataset not in dataset_betas.keys():
+                dataset_betas[dataset] = []
+            dataset_betas[dataset].append((betas, loss))
+            if dataset not in best_betas.keys() or best_betas[dataset][1] > loss:
+                best_betas[dataset] = (betas, loss, columns)
+        idx += 1
+    return best_betas
 
 
-def get_sample_dropouts(beta_estimates, dic_panel, num_samples):
-    final_samples = {}
-    for dataset in dic_panel.keys():
-        data = dic_panel[dataset]
-        samples_dataset = {}
-        for st in beta_estimates.keys():
-            columns_to_check = [col for col, flag in zip(data.columns, st) if flag == '1']
-            contains_na = data[columns_to_check].isna().any().any()
-            if contains_na:
-                samples_dataset[st] = []
-                break
-            columns_to_drop = [col for col, bit in zip(data.columns, st) if bit == '0']
-            new_data = data.drop(columns=columns_to_drop)
-            new_data = new_data.drop(columns=['DATA_ID', 'Number', 'STATUS'])
-            probs = []
-            for _,row in new_data.iterrows():
-                cur_p = 1
-                idx = 0
-                for col in new_data.columns:
-                    cur_p = cur_p * beta_estimates[st][0][beta_estimates[st][2][(idx, row[col])]]
-                    idx += 1
-                probs.append(cur_p)
-            samples = np.random.binomial(1, 1 - np.array(probs), size=(num_samples, len(probs)))
-            samples_dataset[st] = samples
-        final_samples[dataset] = samples_dataset
-    return final_samples
+def generate_dropout_samples(panel, betas, dataset, beta_columns, dataset_columns):
+    dropout_samples = []
+    for _ in range(parameters.num_samples):
+        dropout_sample = []
+        for i, features in enumerate(panel): 
+            dropout = stats.bernoulli.rvs(p=compute_dropout_prob(betas, beta_columns, dataset_columns, features))
+            if dropout:
+                dropout_sample.append(i)
+        dropout_samples.append(dropout_sample)
+    return dropout_samples
 
-def compute_st(panel):
-    return ''.join(['1' if panel[col].notna().any() else '0' for col in panel.columns])
-
-def compute_exact_quotas(dic_panel, beta_estimates):
+def compute_quotas(panel, columns):
     quotas = {}
-    for dataset in dic_panel.keys():
-        quotas_dataset = {}
-        cur_data = dic_panel[dataset].copy()
-        st = compute_st(cur_data)
-        columns_to_keep = [col for col, keep in zip(cur_data.columns, st) if keep == '1']
-        cur_data = cur_data[columns_to_keep]
-        cur_data = cur_data.drop(columns=['DATA_ID', 'Number', 'STATUS'])
-        for _,row in cur_data.iterrows():
-            idx = 0
-            for col in cur_data.columns:
-                cur_feature = (idx, row[col])
-                if row[col] != row[col]:
-                    print(dataset)
-                if cur_feature not in quotas_dataset.keys():
-                    quotas_dataset[cur_feature] = 1
-                else:
-                    quotas_dataset[cur_feature] += 1
-                idx += 1
-        quotas[dataset] = quotas_dataset
+    for fv in parameters.offsets.keys():
+        if fv[0] in columns:
+            quotas[fv] = panel[panel[fv[0]] == fv[1]].shape[0]
     return quotas
 
-# TODO: For Carmel, fill out this function that computes the best set of alternates
-def compute_best_alternates(quotas, panel, pool, dropout_set, num_alternates):
-    """
-    quotas: dictionary that maps feature-value pairs to number of people needed for that fv pair
-    panel: pandas dataframe containing all the people in the pool of that dataset
-    pool: pandas dataframe containing all people in the pool of that dataset
-    dropouts: list that contains len(dropouts) dropout sets. Each dropout set is represented with a list of size equal to the length of the panel and contains 0 if the person stays and 1 if they dropout
-    num_alternates: integer, number of alternates allowed
-    """
-    return 0
 
+def opt_l1(quotas, panel, pool, dropout_samples, alt_budget):
+    prob = Model(sense=MINIMIZE)
 
+    # Variables
+    x = {i: prob.add_var(name=f"x_{i}", var_type=BINARY) for i in range(pool.shape[0])}
+    y = {(i, j): prob.add_var(name=f"y_{i}_{j}", var_type=BINARY) for i in range(pool.shape[0]) for j in range(len(dropout_samples))}
+    z_minus = {(feature, value, j): prob.add_var(name=f"z_{feature}_{value}_{j}_minus", var_type='I', lb=0) for (feature, value) in quotas.keys() for j in range(len(dropout_samples))}
+    z_plus = {(feature, value, j): prob.add_var(name=f"z_{feature}_{value}_{j}_plus", var_type='I', lb=0) for (feature, value) in quotas.keys() for j in range(len(dropout_samples))}
 
+    # Objective
+    prob.objective = xsum(z_plus[(feature, value, j)] + z_minus[(feature, value, j)] for (feature, value) in quotas.keys() for j in range(len(dropout_samples)))
 
+    # Constraints
+    prob.add_constr(xsum(x[i] for i in range(pool.shape[0])) <= alt_budget)
 
+    for j in range(len(dropout_samples)):
+        for i in range(pool.shape[0]):
+            prob.add_constr(y[(i, j)] <= x[i])
 
+        for (feature, value) in quotas.keys():
+            num_agents_dropped_out_with_value = (panel['DATA_ID'] != 'Selected').sum()
+            prob.add_constr((num_agents_dropped_out_with_value - xsum(y[(i, j)] for i in range(pool.shape[0]) if pool.iloc[i][feature] == value)) == z_plus[(feature, value, j)] - z_minus[(feature, value, j)])
 
+    # Print the model (objective and constraints)
+    # Model.write(prob, "model.lp")
+    
+    # Solve the problem
+    prob.optimize()
+    # Print variable values after optimization
+    # for v in prob.vars:
+    #     print(f"{v.name} : {v.x}")
 
+    # get the solution
+    alt_set = [i for i in range(pool.shape[0]) if x[i].x >= 0.99]
+    est_l1_score = prob.objective_value
 
+    return alt_set, est_l1_score / len(dropout_samples)
 
+def get_alternates_set(dataset, panel, pool, betas, beta_columns):
+    dataset_columns = [col for col, bit in zip(panel.columns, parameters.dataset_features[dataset]) if bit == '1']
+    dataset_columns = dataset_columns[2:-1]
+    og_panel = panel
+    panel = panel[dataset_columns]
+    pool = pool[dataset_columns]
+    pool = pool.dropna()
+    panel_df = panel
+    pool_df = pool
+    panel = np.array(panel)
+    pool = np.array(pool)
 
+    dropout_samples = generate_dropout_samples(panel, betas, dataset, beta_columns, dataset_columns)
+    quotas = compute_quotas(panel_df, dataset_columns)
 
-# BRUTE FORCE COMPUTATION
-# def compute_score(alternates, quotas, panel, dropouts, number_of_alternates):
-#     def binary_strings(n = number_of_alternates):
-#         for i in range(2**n):
-#             st = format(i, f'0{n}b')
-#             yield st
-#     cur_quotas = quotas.copy()
-#     cur_panel = panel.copy()
+    # alternates_total = 0
+    # for d in dropout_samples:
+    #     alternates_total += len(d)
+    alt_med = panel_df[og_panel['STATUS'] != 'Selected'].shape[0]
 
-#     st = compute_st(cur_panel)
-#     columns_to_keep = [col for col, keep in zip(cur_panel.columns, st) if keep == '1']
-#     cur_panel = cur_panel[columns_to_keep]
-#     cur_panel = cur_panel.drop(columns=['DATA_ID', 'Number', 'STATUS'])
-#     for i, dropout in enumerate(dropouts):
-#         if dropout == 0 or dropout == '0':
-#             continue
-#         row = cur_panel.iloc[i]
-#         for i, col in enumerate(cur_panel.columns):
-#             if isinstance(row[col], float):
-#                 if math.isnan(row[col]):
-#                     continue
-#             cur_quotas[(i, row[col])] -= 1
-#     smallest_loss = 100
-#     for R in binary_strings():
-#         idx1 = 0
-#         for _, row in alternates.iterrows():
-#             if R[idx1] == '0':
-#                 continue
-#             idx2 = 0
-#             for col in alternates.columns:
-#                 if isinstance(row[col], float):
-#                     if math.isnan(row[col]):
-#                         continue
-#                 if (idx2, row[col]) not in cur_quotas.keys():
-#                     idx2 += 1
-#                     continue
-#                 cur_quotas[(idx2, row[col])] += 1
-#             idx1 += 1
-#         loss = 0
-#         for feature in quotas.keys():
-#             if isinstance(feature[1], float):
-#                 if math.isnan(feature[1]):
-#                     continue
-#             loss += ((np.abs(quotas[feature] - cur_quotas[feature])) / quotas[feature])
-#         if loss <= smallest_loss:
-#             smallest_loss = loss
-#         idx1 = 0
-#         for _, row in alternates.iterrows():
-#             if R[idx1] == '0':
-#                 continue
-#             idx2 = 0
-#             for col in alternates.columns:
-#                 if isinstance(row[col], float):
-#                     if math.isnan(row[col]):
-#                         continue
-#                 if (idx2, row[col]) not in cur_quotas.keys():
-#                     idx2 += 1
-#                     continue
-#                 cur_quotas[(idx2, row[col])] -= 1
-#                 idx2 += 1
-#             idx1 += 1
-#     return smallest_loss
+    return opt_l1(quotas, og_panel, pool_df, dropout_samples, alt_med)
 
-# def get_best_alternates(quotas, panel, pool, samples, num_alternates):
-#     def binary_strings_with_k_ones(n = len(pool), k = num_alternates):
-#         if k > n:
-#             return
-#         for ones_positions in combinations(range(n), k):
-#             binary = [False] * n
-#             for pos in ones_positions:
-#                 binary[pos] = True
-#             yield binary
-#     best_alternates_set = 0
-#     best_alternates_loss = 1000
-#     for alt_st in binary_strings_with_k_ones():
-#         alternates_df = pool[alt_st]
-#         loss = 0
-#         for dropouts in samples:
-#             loss += compute_score(alternates_df, quotas, panel, dropouts, num_alternates)
-#         loss = loss / len(samples)
-#         if loss <= best_alternates_loss:
-#             best_alternates_loss = loss
-#             best_alternates_set = alt_st
-#     return (best_alternates_set, loss)
-
-
-# def compute_best_alternates(quotas, dic_pool, dic_panel, samples, number_of_alternates):
-#     losses = {}
-#     for dataset in samples.keys():
-#         st = compute_st(dic_pool[dataset])
-#         alternates_df = dic_pool[dataset].copy()
-#         columns_to_keep = [col for col, keep in zip(alternates_df.columns, st) if keep == '1']
-#         alternates_df = alternates_df[columns_to_keep]
-#         alternates_df = alternates_df.drop(columns=['DATA_ID', 'Number', 'STATUS'])
-#         for st in samples[dataset]:
-#             print(dataset, st)
-#             if len(samples[dataset][st]) == 0:
-#                 continue
-#             best_alternate_set, best_loss = get_best_alternates(quotas[dataset], dic_panel[dataset], alternates_df, samples[dataset][st], number_of_alternates)
-#             losses[(dataset, st)] = (best_alternate_set, best_loss)
-#     return losses
+def alternates_real_loss(alternates, panel, pool, dataset):
+    def generate_subsets(n):
+        for i in range(1, 2**n):
+            yield [int(bit) for bit in f"{i:0{n}b}"]
+    dataset_columns = [col for col, bit in zip(panel.columns, parameters.dataset_features[dataset]) if bit == '1']
+    dataset_columns = dataset_columns[2:-1]
+    pool = pool[dataset_columns]
+    alternates = pool.iloc[alternates]
+    dropped = panel[panel['STATUS'] != 'Selected']
+    panel = panel[dataset_columns]
+    print(dataset)
+    print(dropped)
+    print(alternates)
+    
+    if dropped.empty:
+        return 0
+    loss = 10000
+    for subset in generate_subsets(len(alternates)):
+        lst = []
+        for i, elt in enumerate(subset):
+            if elt == 1:
+                lst.append(i)
+        cur_alt = alternates.iloc[lst]
+        cur_loss = 0.0
+        for fv in parameters.offsets.keys():
+            if fv[0] not in dataset_columns:
+                continue
+            kfv = panel[panel[fv[0]] == fv[1]].shape[0]
+            if kfv == 0:
+                continue
+            dif = abs(cur_alt[cur_alt[fv[0]] == fv[1]].shape[0] - dropped[dropped[fv[0]] == fv[1]].shape[0])
+            cur_loss += (dif / kfv)
+        loss = min(loss, cur_loss)
+    return loss
