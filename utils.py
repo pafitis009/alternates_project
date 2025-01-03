@@ -165,31 +165,33 @@ def k_fold_validation(X, y):
 
     return compute_betas(np.array(X_all), np.array(y_all), columns), average_loss, columns
 
-def compute_best_betas(possible_subsets, dic_panel):
-    dataset_betas = {}
+def compute_best_betas(cur_dataset, possible_subsets, dic_panel):
+    best_loss = 1000000.0
     best_betas = {}
+    best_columns = []
     idx = 0
     for subset in possible_subsets.keys():
-        if idx > 4:
-            break
+        if cur_dataset not in possible_subsets[subset]:
+            continue
         dataframes = []
         labels = []
         for dataset in possible_subsets[subset]:
+            if dataset == cur_dataset:
+                continue
             X, y = prepare_data(dic_panel[dataset], subset)
             dataframes.append(X)
             labels.append(y)
         betas, loss, columns = k_fold_validation(dataframes, labels)
-        for dataset in possible_subsets[subset]:
-            if dataset not in dataset_betas.keys():
-                dataset_betas[dataset] = []
-            dataset_betas[dataset].append((betas, loss))
-            if dataset not in best_betas.keys() or best_betas[dataset][1] > loss:
-                best_betas[dataset] = (betas, loss, columns)
+        if loss < best_loss:
+            best_loss = loss
+            best_betas = betas
+            best_columns = columns
         idx += 1
-    return best_betas
+    return (best_loss, best_betas, best_columns)
 
 
 def generate_dropout_samples(panel, betas, dataset, beta_columns, dataset_columns):
+    # Could be made faster if needed
     dropout_samples = []
     for _ in range(parameters.num_samples):
         dropout_sample = []
@@ -246,7 +248,46 @@ def opt_l1(quotas, panel, pool, dropout_samples, alt_budget):
 
     return alt_set, est_l1_score / len(dropout_samples)
 
-def get_alternates_set(dataset, panel, pool, betas, beta_columns):
+def opt_01(quotas, panel, pool, dropout_samples, alt_budget):
+    prob = Model(sense=MINIMIZE)
+
+    # Variables
+    x = {i: prob.add_var(name=f"x_{i}", var_type=BINARY) for i in range(pool.shape[0])}
+    y = {(i, j): prob.add_var(name=f"y_{i}_{j}", var_type=BINARY) for i in range(pool.shape[0]) for j in range(len(dropout_samples))}
+    z_minus = {(feature, value, j): prob.add_var(name=f"z_{feature}_{value}_{j}_minus", var_type='I', lb=0) for (feature, value) in quotas.keys() for j in range(len(dropout_samples))}
+    z_plus = {(feature, value, j): prob.add_var(name=f"z_{feature}_{value}_{j}_plus", var_type='I', lb=0) for (feature, value) in quotas.keys() for j in range(len(dropout_samples))}
+
+    # Objective
+    prob.objective = xsum(z_plus[(feature, value, j)] + z_minus[(feature, value, j)] for (feature, value) in quotas.keys() for j in range(len(dropout_samples)))
+
+    # Constraints
+    prob.add_constr(xsum(x[i] for i in range(pool.shape[0])) <= alt_budget)
+
+    for j in range(len(dropout_samples)):
+        for i in range(pool.shape[0]):
+            prob.add_constr(y[(i, j)] <= x[i])
+
+        for (feature, value) in quotas.keys():
+            num_agents_dropped_out_with_value = (panel['DATA_ID'] != 'Selected').sum()
+            prob.add_constr((num_agents_dropped_out_with_value - xsum(y[(i, j)] for i in range(pool.shape[0]) if pool.iloc[i][feature] == value)) == z_plus[(feature, value, j)] - z_minus[(feature, value, j)])
+
+    # Print the model (objective and constraints)
+    # Model.write(prob, "model.lp")
+    
+    # Solve the problem
+    prob.optimize()
+    # Print variable values after optimization
+    # for v in prob.vars:
+    #     print(f"{v.name} : {v.x}")
+
+    # get the solution
+    alt_set = [i for i in range(pool.shape[0]) if x[i].x >= 0.99]
+    est_l1_score = prob.objective_value
+
+    return alt_set, est_l1_score / len(dropout_samples)
+
+
+def get_L1_alternates_set(dataset, panel, pool, betas, beta_columns):
     dataset_columns = [col for col, bit in zip(panel.columns, parameters.dataset_features[dataset]) if bit == '1']
     dataset_columns = dataset_columns[2:-1]
     og_panel = panel
@@ -268,9 +309,17 @@ def get_alternates_set(dataset, panel, pool, betas, beta_columns):
 
     return opt_l1(quotas, og_panel, pool_df, dropout_samples, alt_med)
 
+def get_01_alternates_set():
+    pass
+
+def get_random_alternate_set(dataset, dic_pool, num_alternates):
+    n = dic_pool[dataset].shape[0]
+    samples = np.random.choice(range(0, n-1), size=num_alternates, replace=False)
+    return samples
+
 def alternates_real_loss(alternates, panel, pool, dataset):
     def generate_subsets(n):
-        for i in range(1, 2**n):
+        for i in range(0, 2**n):
             yield [int(bit) for bit in f"{i:0{n}b}"]
     dataset_columns = [col for col, bit in zip(panel.columns, parameters.dataset_features[dataset]) if bit == '1']
     dataset_columns = dataset_columns[2:-1]
