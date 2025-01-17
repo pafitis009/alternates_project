@@ -5,6 +5,7 @@ import random
 import math
 import matplotlib.pyplot as plt
 import scipy.stats as stats
+import seaborn as sns
 
 from mip import Model, xsum, BINARY, MAXIMIZE, MINIMIZE
 from itertools import combinations
@@ -244,7 +245,7 @@ def opt_01(quotas, panel, pool, dropout_samples, alternates, columns):
 
 def get_random_alternate_set(pool, num_alternates):
     n = pool.shape[0]
-    samples = np.random.choice(range(0, n-1), size=num_alternates, replace=False)
+    samples = np.random.choice(range(0, n), size=num_alternates, replace=False)
     return samples
 
 def get_L1_alternates_set(panel, quotas, pool, betas, columns, alternates):
@@ -257,14 +258,18 @@ def get_01_alternates_set(panel, quotas, pool, betas, columns, alternates):
 
     return opt_01(quotas, panel, pool, dropout_samples, alternates, columns)
 
-
-def calculate_alternate_set(panel, pool, quotas, alternates, benchmark, betas, columns):
+def calculate_alternate_set(panel, pool, quotas, alternates_paractitioners, alternates, benchmark, betas, columns):
     if benchmark == 0:
         return get_L1_alternates_set(panel, quotas, pool, betas, columns, alternates)
     elif benchmark == 1:
         return get_01_alternates_set(panel, quotas, pool, betas, columns, alternates)
     elif benchmark == 2:
         return get_random_alternate_set(pool, alternates)
+    elif benchmark == 3:
+        k = min(len(alternates_paractitioners), alternates)
+        n = len(alternates_paractitioners)
+        samples = np.random.choice(range(0, n), size=k, replace=False)
+        return samples
     else:
         return []
 
@@ -307,11 +312,40 @@ def compute_alt_set_loss(panel, pool, quotas, alternates_list, dropouts):
 
     return score
 
-def calculate_loss_sets(alt_sets, panel, pool, quotas, betas, columns):
+def get_best_loss(panel, quotas, pool, alternates, dropouts):
+    prob = Model(sense=MINIMIZE)
+    dropped = panel.iloc[dropouts]
+    x = {i: prob.add_var(name=f"x_{i}", var_type=BINARY) for i in range(pool.shape[0])}
+    z = {(feature, value): prob.add_var(name=f"z_{feature}_{value}", var_type='I', lb=0) for (feature, value) in quotas.keys()}
+    t = prob.add_var(name="obj", var_type='CONTINUOUS', lb=0)
+    # Objective
+    prob.objective = t
+
+    # Constraints
+    prob.add_constr(xsum(x[i] for i in range(pool.shape[0])) == min(alternates, dropped.shape[0]))
+    prob.add_constr(t >= (xsum(z[(feature, value)] / (quotas[(feature, value)] + 1) for (feature, value) in quotas.keys())))
+    prob.add_constr(t <= (xsum(z[(feature, value)] / (quotas[(feature, value)] + 1) for (feature, value) in quotas.keys())))
+
+    for (feature, value) in quotas.keys():
+        num_agents_dropped_out_with_value = dropped[dropped[feature] == value].shape[0]
+        prob.add_constr((xsum(x[i] for i in range(pool.shape[0]) if pool.iloc[i][feature] == value)) <= num_agents_dropped_out_with_value + z[(feature, value)])
+        prob.add_constr((xsum(x[i] for i in range(pool.shape[0]) if pool.iloc[i][feature] == value)) >= num_agents_dropped_out_with_value - z[(feature, value)])
+    prob.optimize()
+    # Print variable values after optimization
+    # for v in prob.vars:
+    #     print(f"{v.name} : {v.x}")
+
+    # get the solution
+    score = prob.objective_value
+
+    return score
+
+def calculate_loss_sets(alt_sets, panel, pool, quotas, betas, columns, num_alternates):
     dropouts = compute_dropouts(np.array(panel[columns]), betas, columns)
     losses = []
     for alt_set in alt_sets:
         losses.append(compute_alt_set_loss(panel, pool, quotas, alt_set, dropouts))
+    losses.append(get_best_loss(panel, quotas, pool, num_alternates, dropouts))
     return losses
 
 def plot_losses(losses, dataset, dataset_i):
@@ -328,11 +362,20 @@ def plot_losses(losses, dataset, dataset_i):
     ax.set_xlabel('Number of Alternates')
     ax.set_ylabel('Loss')
     ax.set_xticks(x)
-    ax.set_xticklabels([elt for elt in parameters.alternates_numbers[dataset_i]])
 
     # Add a legend
     ax.legend()
     plt.savefig("plots/stats_" + str(dataset) + ".png", dpi=300, bbox_inches="tight")
     # Show the plot
+    plt.show()
+
+def plot_violin(losses, dataset, dataset_i, alternates):
+    sns.violinplot(data=losses)
+
+    plt.xlabel('Benchmarks')
+    plt.ylabel('Loss')
+    plt.title('Distribution of ' + str(dataset) + " with " + str(alternates) + " alternates")
+    plt.savefig("plots/stats_" + str(dataset) + "_" + str(alternates) + "_alts.png", dpi=300, bbox_inches="tight")
+    plt.xticks(ticks=[_ for _ in range(len(parameters.benchmarks))], labels=parameters.benchmarks)
     plt.show()
 

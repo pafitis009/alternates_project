@@ -19,16 +19,16 @@ print(panels, pools, best_betas)
 
 for dataset in range(parameters.datasets):
     quotas = utils.compute_quotas(panels[dataset], best_betas[dataset][2])
-    losses = []
-    # if dataset == 1:
-    #     continue
-    for _, alternates in enumerate(parameters.alternates_numbers[dataset]):
+    for _, num_alternates in enumerate(parameters.alternates_numbers[dataset]):
         alternate_sets = []
         for benchmark in range(len(parameters.benchmarks)):
-            alt_set = utils.calculate_alternate_set(panels[dataset], pools[dataset], quotas, alternates, benchmark, best_betas[dataset][1], best_betas[dataset][2])
+            alt_set = utils.calculate_alternate_set(panels[dataset], pools[dataset], quotas, alternates[dataset][1], num_alternates, benchmark, best_betas[dataset][1], best_betas[dataset][2])
             alternate_sets.append(alt_set)
-        cur_losses = utils.calculate_loss_sets(alternate_sets, panels[dataset], pools[dataset], quotas, best_betas[dataset][1], best_betas[dataset][2])
-        losses.append(cur_losses)
-    print(losses)
-    utils.plot_losses(losses, labels[dataset], dataset)
+        losses = [[] for _ in range(len(parameters.benchmarks))] 
+        for _ in range(parameters.plot_samples):
+            cur_losses = utils.calculate_loss_sets(alternate_sets[:len(alternate_sets)-1], panels[dataset], pools[dataset], quotas, best_betas[dataset][1], best_betas[dataset][2], num_alternates)
+            for i, loss in enumerate(cur_losses):
+                losses[i].append(loss)
+        print(losses)
+        utils.plot_violin(losses, labels[dataset], dataset, num_alternates)
 

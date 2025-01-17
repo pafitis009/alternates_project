@@ -1,0 +1,19 @@
+TODO:
+1. Do greedy benchmark
+2. Fix Chris' datasets
+3. Fix quotas
+
+
+
+Done stuff:
+1. Finish 0/1 
+2. add datasets that are left out 
+3. Debug betas 
+4. Implement code for new datasets
+5. Use less alternates, i.e. len(alternates) / 2
+6. Incorporate 0/1 loss for HD dataset
+7. Force the replacement to be equal to the dropouts.
+8. Do simulations where I use fixed betas and create a distribution
+
+On the Hardness of Approximate Reasoning
+Dan Roth

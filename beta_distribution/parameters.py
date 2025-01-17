@@ -2,6 +2,7 @@ datasets = 3
 features = 5
 num_samples = 10
 num_alternates = 5
+plot_samples = 10
 alternates_numbers = [[1, 4, 5, 10, 21], [2, 5, 6, 10, 15, 25], [2, 5, 6, 10, 14, 24]]
 feature_values = {
     'Age Range': 7,
@@ -22,5 +23,5 @@ offsets = {
     ('Educational Attainment', 'Bachelors'): 0, ('Educational Attainment', 'High_school'): 1,  ('Educational Attainment', 'Some_schooling'): 2, ('Educational Attainment', 'Some_college'): 3
 }
 
-benchmarks = ["L1", "01", "Random", "Empty"]
+benchmarks = ["L1", "01", "Random", "Practitioners", "Empty", "Best"] # Add: Greedy
 color = ["blue", "green", "red", "black", "orange"]
