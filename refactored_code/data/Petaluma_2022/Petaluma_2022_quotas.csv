@@ -1,0 +1,26 @@
+﻿category,name,min,max
+Age Range,16-24,3,6
+Age Range,25-34,4,6
+Age Range,35-44,4,6
+Age Range,45-54,5,7
+Age Range,55-64,5,7
+Age Range,65-74,4,6
+Age Range,75_and_up,2,4
+Disability,Yes,2,4
+Disability,No,32,34
+Housing Status,Own,22,24
+Housing Status,Rent,11,13
+Housing Status,Unhoused,0,2
+Gender,Female,16,18
+Gender,Male,16,18
+Gender,Another gender identity,0,2
+Race/Ethnicity,AAPI,2,3
+Race/Ethnicity,Black,2,2
+Race/Ethnicity,Latinx,14,16
+Race/Ethnicity,Multiracial,2,3
+Race/Ethnicity,Native_American,2,2
+Race/Ethnicity,White,14,16
+Educational Attainment,Some_schooling,4,6
+Educational Attainment,High_school,5,7
+Educational Attainment,Some_college,11,13
+Educational Attainment,Bachelors,12,14
