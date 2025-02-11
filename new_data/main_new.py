@@ -8,40 +8,69 @@ panels, pools, alternates = utils.read_and_seperate_data()
 best_betas = {0: (-1, [], []), 1: (-1, [], []), 2: (-1, [], [])}
 labels = ['Deschutes', 'Eugene', 'Petaluma']
 
-for i in range(parameters.datasets):
-    panels_except_i = panels[:i] + panels[i+1:]
-    for subset in utils.generate_subsets():
-        loss, betas, cols = utils.compute_loss_and_betas(subset, panels_except_i)
-        if loss > best_betas[i][0]:
-            best_betas[i] = (loss, betas, cols)
+# for i in range(parameters.datasets):
+#     panels_except_i = panels[:i] + panels[i+1:]
+#     for subset in utils.generate_subsets():
+#         loss, betas, cols = utils.compute_loss_and_betas(subset, panels_except_i)
+#         if loss > best_betas[i][0]:
+#             best_betas[i] = (loss, betas, cols)
 
-for i in best_betas.keys():
-    fv_name = []
-    values = []
-    for fv in parameters.offsets:
-        if fv[0] in best_betas[i][2]:
-            fv_name.append(fv[0][:3] + fv[1][:5])
-            values.append(best_betas[i][1][utils.get_beta_index(fv[0], fv[1], best_betas[i][2], 0)])
+best_betas = utils.compute_loss_and_betas([1]*parameters.features, panels)
+
+fv_name = []
+values = []
+for fv in parameters.offsets:
+    if fv[0] in best_betas[2]:
+        fv_name.append(fv[0][:3] + fv[1][:5])
+        values.append(best_betas[1][utils.get_beta_index(fv[0], fv[1], best_betas[2], 0)])
+
+x = np.arange(len(fv_name))  # Create positions for the 10 bars
+
+# Width of each bar
+width = 0.30  # Bar width (adjustable)
+
+# Create the figure and axes
+_, ax = plt.subplots()
+ax.bar(x, values, width)
+
+ax.set_xlabel('Feature-Value')
+ax.set_ylabel('Beta')
+ax.set_xticks(x)
+ax.set_xticklabels(fv_name, fontsize = 5)
+
+# Add a legend
+ax.legend()
+plt.savefig("plots/betasAll.png", dpi=300, bbox_inches="tight")
+# Show the plot
+plt.show()
+
+# for i in best_betas.keys():
+#     fv_name = []
+#     values = []
+#     for fv in parameters.offsets:
+#         if fv[0] in best_betas[i][2]:
+#             fv_name.append(fv[0][:3] + fv[1][:5])
+#             values.append(best_betas[i][1][utils.get_beta_index(fv[0], fv[1], best_betas[i][2], 0)])
     
-    x = np.arange(len(fv_name))  # Create positions for the 10 bars
+#     x = np.arange(len(fv_name))  # Create positions for the 10 bars
 
-    # Width of each bar
-    width = 0.30  # Bar width (adjustable)
+#     # Width of each bar
+#     width = 0.30  # Bar width (adjustable)
 
-    # Create the figure and axes
-    _, ax = plt.subplots()
-    ax.bar(x, values, width)
+#     # Create the figure and axes
+#     _, ax = plt.subplots()
+#     ax.bar(x, values, width)
     
-    ax.set_xlabel('Feature-Value')
-    ax.set_ylabel('Beta')
-    ax.set_xticks(x)
-    ax.set_xticklabels(fv_name, fontsize = 5)
+#     ax.set_xlabel('Feature-Value')
+#     ax.set_ylabel('Beta')
+#     ax.set_xticks(x)
+#     ax.set_xticklabels(fv_name, fontsize = 5)
 
-    # Add a legend
-    ax.legend()
-    plt.savefig("plots/betas" + labels[i] + ".png", dpi=300, bbox_inches="tight")
-    # Show the plot
-    plt.show()
+#     # Add a legend
+#     ax.legend()
+#     plt.savefig("plots/betas" + labels[i] + ".png", dpi=300, bbox_inches="tight")
+#     # Show the plot
+#     plt.show()
 
     # # Optionally, save the plot
 

@@ -1,6 +1,6 @@
 datasets = 3
 features = 5
-num_samples = 10
+num_samples = 50
 num_alternates = 5
 plot_samples = 10
 alternates_numbers = [[1, 4, 5, 10, 21], [2, 5, 6, 10, 15, 25], [2, 5, 6, 10, 14, 24]]
